@@ -16,29 +16,46 @@ class Database:
     """Database connection manager."""
     
     def __init__(self):
-        settings = get_settings()
-        # Convert postgres:// to postgresql:// for SQLAlchemy 2.0+
-        db_url = settings.DATABASE_URL.replace("postgres://", "postgresql://")
+        self.engine = None
+        self.SessionLocal = None
+        self._initialized = False
+    
+    def _connect(self):
+        """Lazy connection initialization."""
+        if self._initialized:
+            return
         
-        self.engine = create_engine(
-            db_url,
-            echo=settings.LOG_LEVEL == "DEBUG",
-            pool_pre_ping=True,  # Validate connections
-            pool_size=5,
-            max_overflow=10
-        )
-        self.SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=self.engine
-        )
+        try:
+            settings = get_settings()
+            # Convert postgres:// to postgresql:// for SQLAlchemy 2.0+
+            db_url = settings.DATABASE_URL.replace("postgres://", "postgresql://")
+            
+            self.engine = create_engine(
+                db_url,
+                echo=settings.LOG_LEVEL == "DEBUG",
+                pool_pre_ping=True,  # Validate connections
+                pool_size=5,
+                max_overflow=10
+            )
+            self.SessionLocal = sessionmaker(
+                autocommit=False,
+                autoflush=False,
+                bind=self.engine
+            )
+            self._initialized = True
+            logger.info("Database connection established")
+        except Exception as e:
+            logger.error(f"Failed to connect to database: {e}")
+            raise
     
     def get_session(self) -> Session:
         """Get database session."""
+        self._connect()
         return self.SessionLocal()
     
     def init_db(self):
         """Create all tables."""
+        self._connect()
         Base.metadata.create_all(bind=self.engine)
         logger.info("Database tables initialized")
 
