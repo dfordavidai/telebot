@@ -58,31 +58,52 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting FootyOracle...")
 
-    # Initialize database tables
-    db.init_db()
+    try:
+        # Initialize database tables with error handling
+        db.init_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        # Continue anyway - healthcheck should still work
+        logger.warning("Continuing without database (healthcheck will work)")
 
-    # Set up and start the Telegram bot
-    telegram_app = build_application()
-    register_handlers(telegram_app)
-    await telegram_app.initialize()
-    await telegram_app.start()
-    await telegram_app.updater.start_polling()
-    logger.info("Telegram bot polling started")
+    try:
+        # Set up and start the Telegram bot in a background task (non-blocking)
+        telegram_app = build_application()
+        register_handlers(telegram_app)
+        await telegram_app.initialize()
+        await telegram_app.start()
+        # Start polling in background without blocking startup
+        asyncio.create_task(telegram_app.updater.start_polling())
+        logger.info("Telegram bot polling started")
+    except Exception as e:
+        logger.error(f"Failed to start Telegram bot: {e}")
+        logger.warning("Continuing without bot (healthcheck will work)")
 
-    # Set up and start the scheduler
-    scheduler = build_scheduler()
-    scheduler.start()
-    logger.info("Scheduler started")
+    try:
+        # Set up and start the scheduler
+        scheduler = build_scheduler()
+        scheduler.start()
+        logger.info("Scheduler started")
+    except Exception as e:
+        logger.error(f"Failed to start scheduler: {e}")
+        logger.warning("Continuing without scheduler (healthcheck will work)")
 
     yield
 
     logger.info("Shutting down FootyOracle...")
     if scheduler:
-        scheduler.shutdown(wait=False)
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception as e:
+            logger.error(f"Error shutting down scheduler: {e}")
     if telegram_app:
-        await telegram_app.updater.stop()
-        await telegram_app.stop()
-        await telegram_app.shutdown()
+        try:
+            await telegram_app.updater.stop()
+            await telegram_app.stop()
+            await telegram_app.shutdown()
+        except Exception as e:
+            logger.error(f"Error shutting down telegram: {e}")
 
 
 app = FastAPI(title="FootyOracle", lifespan=lifespan)
