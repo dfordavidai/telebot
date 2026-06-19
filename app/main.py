@@ -2,11 +2,12 @@
 
 Runs three things together in one process:
   - FastAPI app (health checks + manual trigger endpoints) for Railway
-  - Telegram bot (command polling)
+  - Telegram bot (command polling) - in separate thread
   - APScheduler (daily import -> score -> publish job)
 """
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
@@ -35,6 +36,8 @@ logger = get_logger(__name__)
 
 telegram_app = None
 scheduler = None
+bot_thread = None
+bot_loop = None
 
 
 def register_handlers(application) -> None:
@@ -51,30 +54,55 @@ def register_handlers(application) -> None:
     application.add_handler(CommandHandler("history", history))
 
 
-async def initialize_services():
-    """Initialize all services in background (non-blocking)."""
-    global telegram_app, scheduler
+def run_bot_polling():
+    """Run Telegram bot polling in a separate thread with its own event loop."""
+    global telegram_app, bot_loop
     
-    logger.info("Initializing services in background...")
-    await asyncio.sleep(0.1)  # Yield control to let FastAPI start
-    
-    # Initialize database
     try:
-        db.init_db()
-        logger.info("✓ Database initialized")
-    except Exception as e:
-        logger.error(f"✗ Database init failed: {e}")
-    
-    # Initialize and start Telegram bot
-    try:
+        # Create new event loop for this thread
+        bot_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(bot_loop)
+        
+        # Initialize database in this thread
+        try:
+            db.init_db()
+            logger.info("✓ Database initialized (bot thread)")
+        except Exception as e:
+            logger.error(f"✗ Database init failed in bot thread: {e}")
+        
+        # Build and start bot
         telegram_app = build_application()
         register_handlers(telegram_app)
-        await telegram_app.initialize()
-        await telegram_app.start()
-        await telegram_app.updater.start_polling()
+        
+        # Run the bot polling synchronously
+        bot_loop.run_until_complete(telegram_app.initialize())
+        bot_loop.run_until_complete(telegram_app.start())
+        
         logger.info("✓ Telegram bot polling started")
+        
+        # Start polling (this blocks until stop is called)
+        bot_loop.run_until_complete(telegram_app.updater.start_polling())
+        
     except Exception as e:
         logger.error(f"✗ Telegram bot failed: {e}")
+    finally:
+        # Cleanup on exit
+        if bot_loop:
+            try:
+                if telegram_app:
+                    bot_loop.run_until_complete(telegram_app.updater.stop())
+                    bot_loop.run_until_complete(telegram_app.stop())
+                    bot_loop.run_until_complete(telegram_app.shutdown())
+            except Exception as e:
+                logger.error(f"Error during bot cleanup: {e}")
+
+
+async def initialize_services():
+    """Initialize services (scheduler) in background."""
+    global scheduler
+    
+    logger.info("Initializing services in background...")
+    await asyncio.sleep(0.5)  # Give bot thread time to start
     
     # Initialize and start scheduler
     try:
@@ -91,14 +119,18 @@ startup_task = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle: start services in background."""
-    global startup_task
+    global startup_task, bot_thread
     
     logger.info("🚀 Starting FootyOracle...")
     
-    # Schedule initialization to happen in background immediately
+    # Start bot polling in a separate thread
+    bot_thread = threading.Thread(target=run_bot_polling, daemon=False)
+    bot_thread.start()
+    logger.info("Bot polling thread started")
+    
+    # Schedule scheduler initialization in background
     startup_task = asyncio.create_task(initialize_services())
     
-    # Don't wait for it - let the app start immediately
     yield
     
     logger.info("🛑 Shutting down FootyOracle...")
@@ -111,7 +143,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     
-    # Cleanup
+    # Cleanup scheduler
     if scheduler:
         try:
             scheduler.shutdown(wait=False)
@@ -119,14 +151,27 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Error shutting down scheduler: {e}")
     
-    if telegram_app:
+    # Stop bot polling
+    if bot_loop and telegram_app:
         try:
-            await telegram_app.updater.stop()
-            await telegram_app.stop()
-            await telegram_app.shutdown()
+            # Schedule stop in the bot loop
+            asyncio.run_coroutine_threadsafe(
+                telegram_app.updater.stop(), bot_loop
+            ).result(timeout=5)
+            asyncio.run_coroutine_threadsafe(
+                telegram_app.stop(), bot_loop
+            ).result(timeout=5)
+            asyncio.run_coroutine_threadsafe(
+                telegram_app.shutdown(), bot_loop
+            ).result(timeout=5)
             logger.info("Telegram bot shut down")
         except Exception as e:
             logger.error(f"Error shutting down telegram: {e}")
+    
+    # Wait for bot thread to finish
+    if bot_thread and bot_thread.is_alive():
+        bot_thread.join(timeout=10)
+        logger.info("Bot polling thread stopped")
 
 
 app = FastAPI(title="FootyOracle", lifespan=lifespan)
