@@ -15,8 +15,12 @@ router = APIRouter()
 
 @router.get("/health")
 def health():
-    """Health check endpoint for Railway."""
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    """Health check endpoint for Railway - fast and synchronous."""
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "service": "FootyOracle"
+    }
 
 
 @router.post("/import")
