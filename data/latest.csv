@@ -1,0 +1,8 @@
+date,league,home,away,xg_home,xg_away,btts,over25,odds
+2026-06-20 15:00:00,EPL,Arsenal,Brighton,2.1,1.0,0.58,0.71,1.85
+2026-06-20 17:30:00,LA_LIGA,Benfica,Porto,1.6,1.4,0.62,0.65,2.10
+2026-06-20 19:45:00,SERIE_A,Inter,Roma,1.8,0.9,0.49,0.60,1.95
+2026-06-20 20:00:00,BUNDESLIGA,Bayern Munich,Dortmund,2.4,1.6,0.70,0.82,1.70
+2026-06-21 14:00:00,LIGUE_1,Psg,Marseille,2.0,0.8,0.45,0.63,1.75
+2026-06-21 16:00:00,EREDIVISIE,Ajax,Psv,1.7,1.5,0.66,0.68,2.05
+2026-06-21 18:00:00,UNKNOWN_LEAGUE,Random Fc,Other Fc,1.2,1.1,0.50,0.55,2.20
