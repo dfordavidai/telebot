@@ -51,57 +51,80 @@ def register_handlers(application) -> None:
     application.add_handler(CommandHandler("history", history))
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle: init DB, start bot polling, start scheduler."""
+async def initialize_services():
+    """Initialize all services in background (non-blocking)."""
     global telegram_app, scheduler
-
-    logger.info("Starting FootyOracle...")
-
+    
+    logger.info("Initializing services in background...")
+    await asyncio.sleep(0.1)  # Yield control to let FastAPI start
+    
+    # Initialize database
     try:
-        # Initialize database tables with error handling
         db.init_db()
-        logger.info("Database initialized successfully")
+        logger.info("✓ Database initialized")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        # Continue anyway - healthcheck should still work
-        logger.warning("Continuing without database (healthcheck will work)")
-
+        logger.error(f"✗ Database init failed: {e}")
+    
+    # Initialize and start Telegram bot
     try:
-        # Set up and start the Telegram bot in a background task (non-blocking)
         telegram_app = build_application()
         register_handlers(telegram_app)
         await telegram_app.initialize()
         await telegram_app.start()
-        # Start polling in background without blocking startup
-        asyncio.create_task(telegram_app.updater.start_polling())
-        logger.info("Telegram bot polling started")
+        await telegram_app.updater.start_polling()
+        logger.info("✓ Telegram bot polling started")
     except Exception as e:
-        logger.error(f"Failed to start Telegram bot: {e}")
-        logger.warning("Continuing without bot (healthcheck will work)")
-
+        logger.error(f"✗ Telegram bot failed: {e}")
+    
+    # Initialize and start scheduler
     try:
-        # Set up and start the scheduler
         scheduler = build_scheduler()
         scheduler.start()
-        logger.info("Scheduler started")
+        logger.info("✓ Scheduler started")
     except Exception as e:
-        logger.error(f"Failed to start scheduler: {e}")
-        logger.warning("Continuing without scheduler (healthcheck will work)")
+        logger.error(f"✗ Scheduler failed: {e}")
 
+
+startup_task = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown lifecycle: start services in background."""
+    global startup_task
+    
+    logger.info("🚀 Starting FootyOracle...")
+    
+    # Schedule initialization to happen in background immediately
+    startup_task = asyncio.create_task(initialize_services())
+    
+    # Don't wait for it - let the app start immediately
     yield
-
-    logger.info("Shutting down FootyOracle...")
+    
+    logger.info("🛑 Shutting down FootyOracle...")
+    
+    # Cancel startup if still running
+    if startup_task and not startup_task.done():
+        startup_task.cancel()
+        try:
+            await startup_task
+        except asyncio.CancelledError:
+            pass
+    
+    # Cleanup
     if scheduler:
         try:
             scheduler.shutdown(wait=False)
+            logger.info("Scheduler shut down")
         except Exception as e:
             logger.error(f"Error shutting down scheduler: {e}")
+    
     if telegram_app:
         try:
             await telegram_app.updater.stop()
             await telegram_app.stop()
             await telegram_app.shutdown()
+            logger.info("Telegram bot shut down")
         except Exception as e:
             logger.error(f"Error shutting down telegram: {e}")
 
